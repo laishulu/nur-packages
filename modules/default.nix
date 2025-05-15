@@ -1,0 +1,3 @@
+{
+  astrill = import ./astrill;
+}
