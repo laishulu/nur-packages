@@ -1,3 +1,2 @@
 {
-  astrill = import ./astrill;
 }
