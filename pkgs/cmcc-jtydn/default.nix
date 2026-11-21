@@ -1,5 +1,5 @@
 {
-  # cmcc-jtydn 鈥?China Mobile Cloud PC (瀹跺涵浜戠數鑴? UOS/Linux client, unpacked
+  # cmcc-jtydn — China Mobile Cloud PC (家庭云电脑) UOS/Linux client, unpacked
   # from the vendor .deb and run inside a buildFHSEnv.
   #
   # The vendor ships a prebuilt Electron 22 application; there is no source to
@@ -7,57 +7,26 @@
   # needs a normal FHS layout (glibc loader, gtk3, nss, ...) comes from the
   # buildFHSEnv sandbox, which keeps the unpatched vendor binaries working.
   lib,
-  stdenv,
-  fetchurl,
-  dpkg,
-  buildFHSEnv,
-  bash,
-  runCommand,
-  coreutils,
-  alsa-lib,
-  at-spi2-atk,
-  at-spi2-core,
-  atk,
-  cairo,
-  cups,
-  dbus,
-  expat,
-  fontconfig,
-  freetype,
-  fuse3,
-  gdk-pixbuf,
-  glib,
-  gtk3,
-  libdrm,
-  libnotify,
-  libpng,
-  libpulseaudio,
-  libsecret,
-  libusb1,
-  libuuid,
-  libva,
-  libvdpau,
-  libxcrypt,
-  libxkbcommon,
-  libXScrnSaver,
-  libXtst,
-  libxshmfence,
-  mesa,
-  nspr,
-  nss,
-  pango,
-  perl,
-  udev,
-  vulkan-loader,
-  xdg-utils,
-  zlib,
+  pkgs,
 }:
 
 let
+  # Only `pkgs` is taken as an argument: the repository is evaluated against
+  # several channels (NUR uses nixpkgs-unstable, the CI matrix also builds with
+  # nixos-24.05), and individual attribute names move between releases -- a
+  # plain `{ libgbm, ... }:` list simply fails to evaluate on an older channel.
+  inherit (pkgs) stdenv fetchurl dpkg buildFHSEnv bash runCommand coreutils perl;
+
+  # Packages of the FHS sandbox, taken by attribute name so that the ones a
+  # given nixpkgs does not provide are skipped instead of breaking evaluation
+  # (`libgbm` for instance only became a top-level attribute after 24.05).
+  available = p: names: map (n: builtins.getAttr n p)
+    (builtins.filter (n: builtins.hasAttr n p) names);
+
   version = "2.23.1";
 
   # The vendor VDI SDK still links against libssl.so.1.1 / libcrypto.so.1.1.
-  # nixpkgs removed `openssl_1_1` (end of life) 鈥?the attribute still exists but
+  # nixpkgs removed `openssl_1_1` (end of life) — the attribute still exists but
   # merely throws, so probing it is useless.  Build the last 1.1.1 release
   # locally instead: shared libraries only, no tests.
   openssl11 = stdenv.mkDerivation {
@@ -166,7 +135,7 @@ let
 
   # The download endpoint is a "latest" short link maintained by the vendor; the
   # hash pins the exact build.  If the vendor publishes a new version the hash
-  # mismatch fails the build on purpose 鈥?bump `version` and `hash` together.
+  # mismatch fails the build on purpose — bump `version` and `hash` together.
   # Human-readable download page: https://soho.komect.com/clientDownload
   src = fetchurl {
     name = "CMCC-JTYDN-UOSx86-${version}.deb";
@@ -390,102 +359,100 @@ SCRIPT_EOF
   fhs = buildFHSEnv {
     name = "cmcc-jtydn-fhs";
 
-    targetPkgs = pkgs: with pkgs; [
+    targetPkgs = p: available p [
       # Runtime deps declared in the .deb's control file
-      gtk3
-      glib
-      nss
-      nspr
-      libnotify
-      libXScrnSaver
-      libXtst
-      xdg-utils
-      at-spi2-atk
-      libuuid
-      libsecret
+      "gtk3"
+      "glib"
+      "nss"
+      "nspr"
+      "libnotify"
+      "libXScrnSaver"
+      "libXtst"
+      "xdg-utils"
+      "at-spi2-atk"
+      "libuuid"
+      "libsecret"
 
       # Remaining Chromium/Electron and GTK stack requirements.
-      # `mesa` alone does not provide libgbm.so.1 鈥?that one lives in a separate
+      # `mesa` alone does not provide libgbm.so.1 — that one lives in a separate
       # output, so it has to be listed explicitly or Electron dies at startup
       # with "error while loading shared libraries: libgbm.so.1".
-      alsa-lib
-      at-spi2-core
-      atk
-      cairo
-      cups
-      dbus
-      expat
-      fontconfig
-      freetype
-      gdk-pixbuf
-      libdrm
-      libgbm
-      libglvnd
-      libpng
-      libpulseaudio
-      libusb1
-      libva
-      libvdpau
-      libxcrypt
-      libxkbcommon
-      libxshmfence
-      mesa
-      pango
-      pcre2
+      "alsa-lib"
+      "at-spi2-core"
+      "atk"
+      "cairo"
+      "cups"
+      "dbus"
+      "expat"
+      "fontconfig"
+      "freetype"
+      "gdk-pixbuf"
+      "libdrm"
+      "libgbm"
+      "libglvnd"
+      "libpng"
+      "libpulseaudio"
+      "libusb1"
+      "libva"
+      "libvdpau"
+      "libxcrypt"
+      "libxkbcommon"
+      "libxshmfence"
+      "mesa"
+      "pango"
+      "pcre2"
       # Provide the shaper explicitly: otherwise the loader may pick the Debian
       # 10 libharfbuzz from the fallback layer, which in turn wants libgraphite2
       # and libicu63 -- libraries from that same old generation that are not
       # worth dragging in.
-      harfbuzz
-      graphite2
-      icu
+      "harfbuzz"
+      "graphite2"
+      "icu"
       # nixpkgs libsndfile (pulled in indirectly) needs the current mpg123
       # symbols; without an explicit copy an older libmpg123 from the fallback
       # layers gets picked and the helper dies with
       # "undefined symbol: mpg123_info2".
-      mpg123
-      udev
-      vulkan-loader
-      zlib
-      libX11
-      libXcomposite
-      libXcursor
-      libXdamage
-      libXext
-      libXfixes
-      libXi
-      libXrandr
-      libXrender
-      libxcb
+      "mpg123"
+      "udev"
+      "vulkan-loader"
+      "zlib"
+      "libX11"
+      "libXcomposite"
+      "libXcursor"
+      "libXdamage"
+      "libXext"
+      "libXfixes"
+      "libXi"
+      "libXrandr"
+      "libXrender"
+      "libxcb"
 
       # Used by the native addons (USB redirect / filesystem redirect / QoE)
-      fuse3
+      "fuse3"
 
       # The remote-view helper (`ccsdk/uos/bin/chuanyun-view`) is a separate
       # vendor Qt5 process spawned by the app; it needs the X/Qt runtime that
       # Electron itself does not, so these are listed explicitly rather than
       # relying on transitive deps of gtk3.
-      pixman
-      libwebp
-      libICE
-      libSM
-      libXau
-      libXdmcp
-      libXxf86vm
+      "pixman"
+      "libwebp"
+      "libICE"
+      "libSM"
+      "libXau"
+      "libXdmcp"
+      "libXxf86vm"
 
-      # `glibc.bin` provides ldd, used by the `--check-libs` self-check.
-      glibc.bin
-
-      # The netdetect addon shells out to `iw` to look at the wireless link,
-      # and the VDI SDK is still linked against OpenSSL 1.1.
-      iw
-      openssl11
+      # The netdetect addon shells out to `iw` to look at the wireless link.
+      "iw"
 
       # Tools the launcher and the app expect in a normal distro PATH, plus
       # pkill for the QoE agent cleanup on exit.
-      coreutils
-      procps
-    ];
+      "coreutils"
+      "procps"
+    ]
+    # Not plain attribute names: the locally built OpenSSL 1.1, the Debian 10
+    # library set, and `glibc.bin` (ldd for the --check-libs self-check).
+    ++ [ debianLibs openssl11 p.glibc.bin ];
 
     # The Debian 10 libraries are mounted on their own, at /debian-libs, and are
     # only searched after the FHS libraries.  Merging them into /usr/lib would
@@ -545,8 +512,10 @@ SCRIPT_EOF
 [Desktop Entry]
 Type=Application
 Name=CMCC Cloud PC
-Name[zh_CN]=绉诲姩浜戠數鑴?Comment=China Mobile cloud desktop client (瀹跺涵浜戠數鑴?/ 宸濅簯 VDI)
-Comment[zh_CN]=涓浗绉诲姩浜戠數鑴戝鎴风锛堝搴簯鐢佃剳 / 宸濅簯 VDI锛?Exec=cmcc-jtydn %U
+Name[zh_CN]=移动云电脑
+Comment=China Mobile cloud desktop client (家庭云电脑 / 川云 VDI)
+Comment[zh_CN]=中国移动云电脑客户端（家庭云电脑 / 川云 VDI）
+Exec=cmcc-jtydn %U
 Icon=cmcc-jtydn
 Terminal=false
 Categories=Network;RemoteAccess;
@@ -557,7 +526,7 @@ EOF
     '';
 
     meta = {
-      description = "China Mobile Cloud PC client (cmcc-jtydn, Electron/宸濅簯 VDI)";
+      description = "China Mobile Cloud PC client (cmcc-jtydn, Electron/川云 VDI)";
       homepage = "https://soho.komect.com/clientDownload";
       license = lib.licenses.unfree;
       platforms = [ "x86_64-linux" ];
