@@ -27,7 +27,7 @@ nix run .#cmcc-jtydn             # flake
 nix-build -A cmcc-jtydn --arg pkgs 'import <nixpkgs> {}'
 ```
 
-作为 flake 输入或通过 NUR overlay 使用，见仓库根 [`README.md`](../../README.md)。
+作为 flake 输入或通过本仓库的 overlay 使用，见仓库根 [`README.md`](../../README.md)。
 
 ## 首次运行
 
@@ -266,20 +266,23 @@ guest 建好显示后，viewer 立刻通过 `spice_main_channel_update_display()
 }
 ```
 
-走 NUR 暴露的入口时（本仓库作为 NUR repo，模块在 `modules` 下，不是
-`nixosModules`——那是 flake 的输出名）：
+如果你的配置把本仓库挂到了 `nur.repos.<名字>` 下（例如自己写一层 overlay：
+`laishulu = import inputs.nur-laishulu { pkgs = prev; };`——注意本仓库目前**不在**
+nix-community/NUR 的索引里，`pkgs.nur.repos.laishulu` 默认是不存在的），模块名是
+`modules.cmcc-jtydn-usb`（复数 `modules`，`nixosModules` 是 flake 的输出名）。
+
+这种情况下**不要**在模块文件里写 `imports = [ pkgs.nur... ]`：`pkgs` 是模块参数，
+而 `imports` 在参数解析之前求值，会直接触发 infinite recursion。要放在 `flake.nix`
+的 `nixosSystem.modules` 里：
 
 ```nix
-# modules/default.nix 之类的模块文件里
-{ config, lib, pkgs, ... }:
-{
-  imports = [ pkgs.nur.repos.laishulu.modules.cmcc-jtydn-usb ];
-  services.cmcc-jtydn-usb.enable = true;
-}
+modules = [
+  inputs.nur-laishulu.nixosModules.cmcc-jtydn-usb
+];
 ```
 
 `package` 选项会依次找 `pkgs.cmcc-jtydn`（加了本仓库 overlay 时）和
-`pkgs.nur.repos.laishulu.cmcc-jtydn`（NUR 暴露时），都不用显式指定。
+`pkgs.nur.repos.laishulu.cmcc-jtydn`，都不用显式指定。
 
 不用 flake 的话，把这个包做进 `environment.systemPackages` 之后手工写：
 

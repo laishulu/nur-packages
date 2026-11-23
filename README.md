@@ -1,6 +1,6 @@
 # nur-packages
 
-[laishulu](https://github.com/laishulu) 的个人 [NUR](https://github.com/nix-community/NUR) 仓库。
+[laishulu](https://github.com/laishulu) 的个人仓库，按 [NUR](https://github.com/nix-community/NUR) 的格式组织（当前未收录进 NUR 索引）。
 
 ## 包
 
@@ -16,24 +16,10 @@
 
 ## 用法
 
-### NUR（推荐）
+> **注意**：这个仓库目前**没有进 nix-community/NUR 的索引**（NUR 的 `repos.json` 里没有
+> `laishulu`），所以 `pkgs.nur.repos.laishulu.*` 取不到。用下面的 flake 入口。
 
-在 `configuration.nix` 里启用 NUR 后：
-
-```nix
-{ pkgs, ... }:
-{
-  nixpkgs.config.allowUnfree = true;   # cmcc-jtydn 是专有软件
-  environment.systemPackages = [ pkgs.nur.repos.laishulu.cmcc-jtydn ];
-}
-```
-
-`cmcc-jtydn` 这个属性只有在 `allowUnfree` 打开时才会出现（否则整个属性省略）。
-这是给 NUR 用的：NUR 评估每个仓库时用的是 `allowUnfree = false` 的 `pkgs`，仓库里若有
-unfree 派生，会让**整个仓库**的评估失败；省略它反而能正常收录。flake 内部已经开了
-`allowUnfree`，所以 `nix flake check` / `nix run .#cmcc-jtydn` 照常可用。
-
-### flake
+### flake（推荐）
 
 ```nix
 {
@@ -41,26 +27,62 @@ unfree 派生，会让**整个仓库**的评估失败；省略它反而能正常
 
   outputs = { self, nixpkgs, nur-packages, ... }: {
     nixosConfigurations.host = nixpkgs.lib.nixosSystem {
-      modules = [{
-        nixpkgs.overlays = [ nur-packages.overlays.default ];
-        environment.systemPackages = [ pkgs.cmcc-jtydn ];
-      }];
+      modules = [
+        ({ pkgs, ... }: {
+          nixpkgs.config.allowUnfree = true;   # cmcc-jtydn 是专有软件
+          nixpkgs.overlays = [ nur-packages.overlays.default ];
+          environment.systemPackages = [ pkgs.cmcc-jtydn ];
+        })
+      ];
     };
   };
 }
 ```
 
-### 传统方式
+`allowUnfree = true` 是必须的：本仓库只在 `pkgs.config.allowUnfree` 打开时才暴露
+`cmcc-jtydn`（NUR 用它自己的严格 `pkgs` 评估每个仓库，不省略 unfree 属性会让整个仓库
+评估失败，所以做成按需暴露）。
+
+### 直接运行 / 构建
+
+flake 内部已经开了 `allowUnfree`，不需要额外设置：
 
 ```console
+$ nix run github:laishulu/nur-packages#cmcc-jtydn
+$ nix build github:laishulu/nur-packages#cmcc-jtydn
+```
+
+### 本地检出 / 传统方式
+
+```console
+$ git clone https://github.com/laishulu/nur-packages && cd nur-packages
+$ nix run .#cmcc-jtydn
 $ nix-build -A cmcc-jtydn
 $ nix-shell -A cmcc-jtydn
 ```
 
+### 自己把本仓库挂进 NUR 的情况
+
+有些配置会自己写一层 overlay 把本仓库挂到 `nur.repos.<名字>` 下，例如：
+
+```nix
+nur = prev.nur // {
+  repos = prev.nur.repos // {
+    laishulu = import inputs.nur-laishulu { pkgs = prev; };
+  };
+};
+```
+
+只有这样才有 `pkgs.nur.repos.laishulu.cmcc-jtydn`（以及
+`pkgs.nur.repos.laishulu.modules.cmcc-jtydn-usb`，注意是 `modules`，不是 flake 输出名
+`nixosModules`）。模块的 `package` 选项会依次找 `pkgs.cmcc-jtydn` 和
+`pkgs.nur.repos.laishulu.cmcc-jtydn`，都不用显式指定。
+
 ## 维护
 
 - 更新 nixpkgs：`nix flake update`，然后 `nix flake check`。
-- 推送后想让 NUR 立刻感知：`curl -XPOST "https://nur-update.nix-community.org/update?repo=laishulu"`。
+- 如果哪天这个仓库被 NUR 收录了，推送后想让它立刻感知：
+  `curl -XPOST "https://nur-update.nix-community.org/update?repo=laishulu"`。
 - CI 会按 `ci.nix` 只构建可自由分发（`license.free`）且可缓存的包；`cmcc-jtydn` 因为
   unfree 不会进 CI，需要用户本地构建，这是预期行为。
 
