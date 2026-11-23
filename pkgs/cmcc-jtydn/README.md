@@ -174,7 +174,7 @@ __libc_msgsnd ← MessageQueue::send ← DeviceRedirectManager::StartCdpUSB
 
 修法：`displayFix` shim 里同时拦截 `msgsnd@GLIBC_2.2.5`，强制加 `IPC_NOWAIT`；队列满
 （`EAGAIN`）或队列已被删除（`EIDRM`）时**丢弃这条消息并返回成功**，UI 线程不再阻塞。
-USB 重定向本来在本包里就不可用，丢掉这些消息没有副作用。
+这些消息只有 USB 重定向守护进程会读；它不在时本来也没人消费，丢掉没有副作用。
 
 - 关掉：`CMCC_NO_DISPLAY_FIX=1 cmcc-jtydn`
 - 调试：`CMCC_DEBUG_SHIM=1 cmcc-jtydn`，`/tmp/cmcc-shim.log` 里会看到
@@ -347,7 +347,7 @@ services.udev.extraRules = ''
 | Chromium SUID sandbox | `chmod 4755 chrome-sandbox` | 关闭 sandbox |
 | USB 重定向（chuanyun-redirect） | systemd 服务（root）+ udev 规则 | **已提供**：`bin/cmcc-jtydn-redirect` + `lib/systemd/system/cmcc-jtydn-redirect.service`，用 NixOS 模块 `services.cmcc-jtydn-usb` 启用（见上一节） |
 | 网络探测 `net_ping` | postinst 里 `setcap cap_net_raw+ep` | 2.23.1 根本没带这个二进制，属于空操作，无需处理 |
-| udev 规则 `99-usb-permissions.rules` | 复制到 `/etc/udev/rules.d` | 2.23.1 里同样缺失，无需处理 |
+| udev 规则 `99-usb-permissions.rules` | 复制到 `/etc/udev/rules.d` | 2.23.1 里没有这个文件；守护进程运行时自己往里追加 VID:PID，沙箱里该路径被 bind 到 `/run/cmcc-jtydn/udev`；用户态访问由模块里的 `TAG+="uaccess"` 规则提供 |
 | QoE 测速（zqoe.service） | 安装并启动 systemd 服务 | 由启动器代为启动：`monitor_qoe.sh` 里硬编码的 `/opt/...` 会在运行时改写到可写副本，客户端退出时一并停掉；`CMCC_NO_QOE=1` 可关闭 |
 | `cmcc-jtydn` 命令 | `update-alternatives` 链接到 `/usr/bin` | 由 `$out/bin/cmcc-jtydn` 提供 |
 | 桌面快捷方式 | 复制到用户桌面 | 提供 `.desktop`，不复制到桌面 |

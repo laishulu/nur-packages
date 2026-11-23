@@ -313,7 +313,7 @@ SCRIPT_EOF
   # lookups (session/channels/primary surface) are resolved at run time so the
   # shim has no link-time dependency on the vendor library.  If anything is
   # missing it simply passes the call through unchanged.
-  # CMCC_NO_DISPLAY_FIX=1 disables it, CMCC_DEBUG_DISPLAY=1 logs every request.
+  # CMCC_NO_DISPLAY_FIX=1 disables it, CMCC_DEBUG_SHIM=1 logs every request.
   displayFix = stdenv.mkDerivation {
     pname = "cmcc-jtydn-display-fix";
     inherit version;
@@ -330,7 +330,6 @@ SCRIPT_EOF
       #include <stdio.h>
       #include <stdlib.h>
       #include <sys/msg.h>
-      #include <time.h>
       #include <unistd.h>
 
       static void shim_log(const char *fmt, ...)
@@ -412,7 +411,6 @@ SCRIPT_EOF
       static is_a_fn is_a;
       static get_type_fn display_type;
       static get_primary_fn get_primary;
-      static int skipped_resize;
 
       static void resolve(void)
       {
@@ -471,16 +469,6 @@ SCRIPT_EOF
         shim_log("display shim: call %dx%d", rw, rh);
         if (!channel || !real_update)
           return;
-
-        /* Opt-in A/B knob: the very first call comes right after the guest
-         * created its display.  Some guests stop delivering frames when their
-         * mode is changed at that moment; skipping it keeps the guest at its
-         * own resolution (the viewer then scales). */
-        if (getenv("CMCC_SKIP_CONNECT_RESIZE") && !skipped_resize) {
-          skipped_resize = 1;
-          shim_log("display shim: skipped connect-time resize %dx%d", rw, rh);
-          return;
-        }
 
         if (w > 0 && h > 0) {
           int mw = 0, mh = 0;
@@ -799,8 +787,7 @@ SCRIPT_EOF
       # quality.  It is started here directly instead of through the vendor's
       # monitor_qoe.sh: that script is a `while true` loop which respawns the
       # agent every five seconds, so closing the client left a process tree that
-      # was impossible to get rid of.  USB redirection is still not provided (it
-      # needs a root setuid helper).  Set CMCC_NO_QOE=1 to leave the agent off.
+      # was impossible to get rid of.  Set CMCC_NO_QOE=1 to leave it off.
       qoe_pid=""
       if [ "''${CMCC_NO_QOE:-0}" != 1 ] && [ -x "$qoe_dir/bin/QoEAgent" ]; then
         mkdir -p "$qoe_dir/log"
@@ -1025,8 +1012,7 @@ SCRIPT_EOF
   redirectFhs = buildFHSEnv {
     name = "cmcc-jtydn-redirect-fhs";
 
-    targetPkgs = p: available p (clientLibs ++ [ "fuse3" "libusb1" "udev" ])
-      ++ [ debianLibs ];
+    targetPkgs = p: available p clientLibs ++ [ debianLibs ];
 
     # the vendor tree is read-only, so give the daemon writable state instead
     extraBwrapArgs = [
