@@ -67,6 +67,237 @@ ${XDG_DATA_HOME:-~/.local/share}/cmcc-jtydn/2.23.1/app
 - `buildFHSEnv` 依赖 `bubblewrap`，也就是内核要允许非特权 user namespace；
   如果系统关了 userns，`bwrap` 会直接报错，需要先放开。
 
+## 键盘：Shift 卡住（已在包内修掉）
+
+现象：进入云电脑后按一次 Shift，之后远端就一直是“按住 Shift”的状态——小写字母
+全变大写、数字键出的是 `!@#$`，本地其它程序完全正常；关掉客户端重连才恢复。
+
+根因是**键盘布局 + 客户端按键识别方式**的组合：
+
+1. KDE 键盘设置里开了 “Both Shift keys together enable Caps Lock”
+   （`~/.config/kxkbrc` 的 `Options=...,shift:both_capslock`），XKB 里是：
+
+   ```
+   key <LFSH> { [ Shift_L, Caps_Lock ] };
+   key <RTSH> { [ Shift_R, Caps_Lock ] };
+   ```
+
+   即 Shift 键「按下时是 Shift_L、加 Shift 之后是 Caps_Lock」。
+
+2. 客户端把按键转成 keysym 时用的是**当前键盘状态**（Qt 走
+   `xkb_state_key_get_one_sym(state, keycode)`，抓键线程走 `XLookupString`）。
+   X11 的抬起事件到达时，正在释放的那个修饰键还按着，于是取到的是「加 Shift」
+   的那一级：
+
+   | 事件 | 取得的 keysym |
+   | --- | --- |
+   | Shift 按下 | `0xffe1` Shift_L ✅ |
+   | Shift 抬起 | `0xffe5` Caps_Lock ❌ |
+
+   可以在本机复现：
+
+   ```
+   setxkbmap -print | grep both_capslock      # keymap 里确实有这个选项
+   xmodmap -pke | grep 'keycode  50'          # Shift_L Caps_Lock
+   ```
+
+3. 客户端于是把 Shift 的抬起当成 Caps Lock：日志里是
+   `QEvent::KeyRelease: key: 16777252`（Qt::Key_CapsLock）、
+   `Release scanCodeHash: 58`（CapsLock），**Shift 的 key-up 从来没发出去**，
+   guest 就一直按着 Shift。只有修饰键会中招（普通字母/数字的 keysym 不受这个
+   选项影响），重连清空输入通道后恢复。
+
+修法：一个只加载进客户端进程的 `LD_PRELOAD` shim（源码见 `default.nix` 的
+`keyboardFix`），包住 `xkb_state_key_get_one_sym`：当它把某个键解析成
+`Caps_Lock`/`Shift_Lock`/`Num_Lock`、而这个键的**基础（level 0）keysym 是修饰键**
+时，改报基础 keysym。
+
+只钩这一个函数就够，是因为客户端不管走哪条路，修饰键最后都要在 Qt 里被解析成
+`Qt::Key` 才会发给 guest：
+
+| 路径 | 触发条件 | 修饰键的 keysym 来自 |
+| --- | --- | --- |
+| 抓键线程（grabkb）| `XGrabKeyboard` 成功 | 合成事件回到 Qt 后再解析 |
+| 普通焦点路径 | 没抓住键盘，Qt 直接收事件 | Qt 自己的 xkb state |
+
+厂商二进制一个字节都没改。普通键（含 Shift+字母）不满足“基础 keysym 是修饰键”，
+原样返回，所以大写字母、`!@#$` 不受影响。
+
+对着本机真实 keymap（`us` + `shift:both_capslock`）实测：
+
+```
+                     不加 shim            加 shim
+Shift 键(shift 按着) 0xffe5 Caps_Lock     0xffe1 Shift_L
+'1'  (shift 按着)    0x21  '!'            0x21  '!'
+'a'  (shift 按着)    0x41  'A'            0x41  'A'
+```
+
+启动后日志应该变成 `QEvent::KeyRelease: key: 16777248`（Qt::Key_Shift）、
+`Release scanCodeHash: 42`，而不是 58。
+
+- 想临时关掉：`CMCC_NO_KB_FIX=1 cmcc-jtydn`。
+- 关掉 `shift:both_capslock` 映射当然也能解决，但不是必须的，包内已经兼容。
+
+## 连上后黑屏、菜单卡死
+
+现象：连上云电脑后 viewer 窗口全黑、整个界面没响应（悬浮菜单点不动），但进程没退出；
+时有时无。
+
+根因：viewer 在 **GUI 线程**里通过 System V 消息队列启动 USB 重定向：
+
+```
+QSpiceWidget::displayOpenGlInvalidate
+  → QSpiceConn::DealCdpUSB / StartCdpUSB
+    → DeviceRedirectManager::StartCdpUSB
+      → MessageQueue::send → msgsnd(2)
+```
+
+本包没有装 `.deb` 里那套 setuid 的 `chuanyun-redirect` + systemd 服务，队列没有消费者；
+而 `kernel.msgmnb` 只有 16384 字节，队列一满 `msgsnd` 就**阻塞**（不是返回错误）。UI 线程
+卡死 → 不绘制、不发 firstFrame、菜单无响应；解码线程是另一条线程，所以日志里还能看到
+`decoder first avframe`。这也解释了为什么软件渲染 / 换 GL 后端都没用。
+
+可以这样确认（黑屏时看队列）：
+
+```sh
+ipcs -q
+# 0x00000064 msqid 0 ... 已用 16065 字节 10 条     ← 16384 的上限快满了
+cat /proc/sys/kernel/msgmnb        # 16384
+```
+
+以及崩溃栈（会话结束时 abort 也在同一条路径）：
+
+```
+__libc_msgsnd ← MessageQueue::send ← DeviceRedirectManager::StartCdpUSB
+← QSpiceConn::StartCdpUSB ← QSpiceWidget::displayOpenGlInvalidate
+```
+
+修法：`displayFix` shim 里同时拦截 `msgsnd@GLIBC_2.2.5`，强制加 `IPC_NOWAIT`；队列满
+（`EAGAIN`）或队列已被删除（`EIDRM`）时**丢弃这条消息并返回成功**，UI 线程不再阻塞。
+USB 重定向本来在本包里就不可用，丢掉这些消息没有副作用。
+
+- 关掉：`CMCC_NO_DISPLAY_FIX=1 cmcc-jtydn`
+- 调试：`CMCC_DEBUG_SHIM=1 cmcc-jtydn`，`/tmp/cmcc-shim.log` 里会看到
+  `display shim: msgsnd queue 0 full/gone (EAGAIN), dropped`
+
+> 顺带：黑屏时如果 `ipcs -q` 里那两个队列的属主是别的用户（比如 `nix`），是之前用
+> 别的账号直接跑过厂商客户端留下的，可以用 `sudo ipcrm -q <msqid>` 清掉，不过装了本包
+> 的 shim 之后不清也不会再卡。
+
+## 连上后分辨率被顶到本地 4K（已修）
+
+现象：有时连上去后 viewer 按本地屏幕的 3840×2160 去申请分辨率，云端驱动不了就黑屏；
+顶部悬浮菜单里能看出分辨率和本地不一致。时有时无。
+
+根因：本地是 4K 屏 + 200% 缩放（`kwinoutputconfig.json` 里 `eDP-1` 的 `scale: 2`，
+X 侧 `Xft.dpi: 192`），但 `buildFHSEnv` 里的 Qt 5.12 没有拿到这个缩放，看到的仍是
+物理的 3840×2160：
+
+```
+spice-widget SPICE displayPrimaryCreate: Display Create W x H 1920 x 1200
+now is fullscreen: vm size() 1920x1200 local 3840x2160
+spice-widget updateSize: request vm updateDispaly W x H 3840 2160
+```
+
+guest 建好显示后，viewer 立刻通过 `spice_main_channel_update_display()` 请求把它切到
+窗口大小；云端接受这个模式但驱动不了就黑屏。别的客户端不动 guest 的分辨率、只在本地
+缩放，所以没事。
+
+修法（`default.nix` 里的 `displayFix` shim + 启动器里的分辨率上限）：
+
+1. 启动器在进沙箱后读 X 服务器的 `Xft.dpi`（KWin 在 200% 缩放下给 192）和
+   `xrandr --current` 的物理分辨率（3840×2160），算出**逻辑分辨率**
+   `3840*96/192 x 2160*96/192 = 1920x1080`，通过 `CMCC_MAX_DISPLAY` 传给 shim。
+2. `displayFix` 用 version script 导出 `spice_main_channel_update_display@SPICEGTK_1`
+   来拦截这个调用，把请求宽度/高度夹到 `CMCC_MAX_DISPLAY`（拿得到 guest 当前主
+   surface 尺寸时也不会超过它），**请求照常发出去**。
+
+注意别做成“直接丢弃请求”：实测丢一次之后 guest 连第一帧都不出（viewer 日志里没有
+`firstFrame come`），所以这里是夹小而不是不发。
+
+- 关掉：`CMCC_NO_DISPLAY_FIX=1 cmcc-jtydn`
+- 自己定上限：`CMCC_MAX_DISPLAY=2560x1440 cmcc-jtydn`（不设时按逻辑分辨率算）
+- 调试：`CMCC_DEBUG_SHIM=1 cmcc-jtydn` → `/tmp/cmcc-shim.log`，形如
+
+  ```
+  display shim loaded (pid 1234)
+  display shim: call 3840x2160
+  display shim: request 3840x2160, max 1920x1080, guest 0x0 -> sent 1920x1080
+  keyboard shim loaded (pid 1234)
+  ```
+
+  厂商日志里的 `updateSize: request vm updateDispaly W x H 3840 2160` 是在调用**之前**
+  打的，夹取不会改变它，不能用它验证。
+
+## USB 重定向
+
+`.deb` 的 USB 重定向由两部分组成：viewer 通过 System V 消息队列把「把某个 USB 设备
+交给云端」的请求发出去，root 守护进程 `chuanyun-redirect` 接收后在本机认领设备
+（libusbipd），并把设备的 VID:PID 写进 udev 规则。这条队列就是前面窗口卡死那节的
+同一条；本包默认不装那个守护进程，所以客户端的 USB 列表一直是摆设。
+
+本包把它补上了：
+
+- `$out/bin/cmcc-jtydn-redirect`：在**单独的 FHS 沙箱**里启动厂商的
+  `chuanyun-redirect`（它是指向 Debian 解释器的 UOS 二进制），库查找顺序和客户端
+  包装一致——先镜像 FHS 库，再补 buster 才有的 soname，厂商目录最后。
+- `$out/lib/systemd/system/cmcc-jtydn-redirect.service`：以 root 运行；
+  `RuntimeDirectory=cmcc-jtydn` 提供可写的 `/run/cmcc-jtydn`（守护进程往里写 udev
+  规则）；`Restart=always`，因为守护进程处理到上一条残留的 "stop" 消息会正常退出。
+- NixOS 模块 `nixosModules.cmcc-jtydn-usb`（`modules/cmcc-jtydn-usb.nix`）：
+  起上面那个服务，并加一条 `SUBSYSTEM=="usb" ... TAG+="uaccess"` 的 udev 规则，
+  让桌面用户能看到设备。
+
+启用（flake）：
+
+```nix
+{
+  inputs.nur-packages.url = "github:laishulu/nur-packages";
+
+  # nixosConfigurations.<host>.modules 里：
+  modules = [
+    inputs.nur-packages.nixosModules.cmcc-jtydn-usb
+    {
+      services.cmcc-jtydn-usb.enable = true;
+      # 默认取 flake 自带的包；也可以显式指定：
+      # services.cmcc-jtydn-usb.package = inputs.nur-packages.packages.x86_64-linux.cmcc-jtydn;
+    }
+  ];
+}
+```
+
+不用 flake 的话，把这个包做进 `environment.systemPackages` 之后手工写：
+
+```nix
+systemd.services.cmcc-jtydn-redirect = {
+  description = "CMCC Cloud PC USB redirection";
+  wantedBy = [ "multi-user.target" ];
+  after = [ "network.target" "systemd-udevd.service" ];
+  serviceConfig = {
+    ExecStart = "${pkgs.cmcc-jtydn}/bin/cmcc-jtydn-redirect";
+    Restart = "always";
+    RuntimeDirectory = "cmcc-jtydn";
+    LimitNOFILE = 65535;
+  };
+};
+services.udev.extraRules = ''
+  SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", TAG+="uaccess"
+'';
+```
+
+说明与限制：
+
+- 守护进程以 **root** 运行（.deb 的 unit 也是 `User=root`），它需要解开内核驱动绑定、
+  访问 `/dev/bus/usb` 与 `/sys`，并写 udev 规则。
+- 它跑在包自带的 FHS 沙箱里，`/run/cmcc-jtydn` 会被 bind 到沙箱内的
+  `/etc/udev/rules.d`（宿主的 `/etc` 在 NixOS 上只读），所以它写的规则只在沙箱里
+  生效；真正的权限由模块里那条静态 udev 规则 + root 守护进程保证。
+- 会话结束后守护进程可能收到残留的 "stop" 消息而退出，`Restart=always` 会把它拉起来
+  并保持空闲，这是预期行为。
+- 这部分依赖真实 USB 设备 + 云电脑联调，本仓库只验证到「守护进程能在沙箱里启动、
+  连上消息队列、正常收 SIGTERM 退出」；实际设备透传需要你在真机上试，日志看
+  `journalctl -u cmcc-jtydn-redirect`。
+
 ## 已知限制
 
 这些功能在上游 `.deb` 的 postinst 里通过 root 操作装配，本包**默认不做**，
@@ -75,16 +306,15 @@ ${XDG_DATA_HOME:-~/.local/share}/cmcc-jtydn/2.23.1/app
 | 功能 | 上游做法 | 本包状态 |
 | --- | --- | --- |
 | Chromium SUID sandbox | `chmod 4755 chrome-sandbox` | 关闭 sandbox |
-| USB 重定向（chuanyun-redirect） | systemd 服务 + setuid `fusermount3` | 未安装；服务文件里的 `/opt/...` 路径也不可用 |
+| USB 重定向（chuanyun-redirect） | systemd 服务（root）+ udev 规则 | **已提供**：`bin/cmcc-jtydn-redirect` + `lib/systemd/system/cmcc-jtydn-redirect.service`，用 NixOS 模块 `services.cmcc-jtydn-usb` 启用（见上一节） |
 | 网络探测 `net_ping` | postinst 里 `setcap cap_net_raw+ep` | 2.23.1 根本没带这个二进制，属于空操作，无需处理 |
 | udev 规则 `99-usb-permissions.rules` | 复制到 `/etc/udev/rules.d` | 2.23.1 里同样缺失，无需处理 |
 | QoE 测速（zqoe.service） | 安装并启动 systemd 服务 | 由启动器代为启动：`monitor_qoe.sh` 里硬编码的 `/opt/...` 会在运行时改写到可写副本，客户端退出时一并停掉；`CMCC_NO_QOE=1` 可关闭 |
 | `cmcc-jtydn` 命令 | `update-alternatives` 链接到 `/usr/bin` | 由 `$out/bin/cmcc-jtydn` 提供 |
 | 桌面快捷方式 | 复制到用户桌面 | 提供 `.desktop`，不复制到桌面 |
 
-如果之后要补 USB 重定向，需要自己写一个以 root 运行的 wrapper（NixOS 里可以用
-`systemd.services` + `security.wrappers`），并把 `chuanyun-redirect.service` 里的
-`/opt/chuanyun-vdi-client/...` 替换成 `${cmcc-jtydn}/opt/...` 的实际路径。
+USB 重定向现在由 `bin/cmcc-jtydn-redirect`（自带 FHS 沙箱）+ NixOS 模块
+`services.cmcc-jtydn-usb` 提供，不再需要手工写 root wrapper。
 
 ## 实测记录
 

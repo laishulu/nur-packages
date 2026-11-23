@@ -23,5 +23,17 @@
       # `nur.repos.laishulu.overlays.default`), the root overlay.nix is a thin
       # re-export for non-flake use.
       overlays.default = (import ./overlays).default;
+
+      # NixOS module: starts the vendor's USB redirection daemon as root.  The
+      # wrapper below points the module at this flake's package so consumers do
+      # not have to apply the overlay for it to evaluate.
+      nixosModules = {
+        default = self.nixosModules.cmcc-jtydn-usb;
+        cmcc-jtydn-usb = { pkgs, lib, ... }: {
+          imports = [ ./modules/cmcc-jtydn-usb.nix ];
+          services.cmcc-jtydn-usb.package = lib.mkDefault
+            (import ./default.nix { inherit pkgs; }).cmcc-jtydn;
+        };
+      };
     };
 }
