@@ -51,8 +51,9 @@ in
       wants = [ "network.target" ];
 
       # The daemon sandboxes itself with bubblewrap and needs to write under
-      # /run/cmcc-jtydn (udev rules for the freshly attached device) and to
-      # touch USB sysfs entries, so no additional hardening here.
+      # /run/cmcc-jtydn (its scratch dir and the udev drop-in) and to touch USB
+      # sysfs entries, so it stays privileged.  A private /tmp keeps its
+      # scratch files away from (and unforgeable by) other users.
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/cmcc-jtydn-redirect";
         # the daemon sandbox binds /run/cmcc-jtydn/udev over /etc/udev/rules.d
@@ -63,11 +64,9 @@ in
         Restart = "always";
         RestartSec = 3;
         RuntimeDirectory = "cmcc-jtydn";
-        RuntimeDirectoryMode = "0755";
+        RuntimeDirectoryMode = "0700";
         LimitNOFILE = 65535;
-        PrivateTmp = false;
-        ProtectSystem = false;
-        ProtectHome = false;
+        PrivateTmp = true;
       };
     };
 

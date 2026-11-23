@@ -16,7 +16,7 @@ let
   # nixos-24.05), and individual attribute names move between releases -- a
   # plain `{ libgbm, ... }:` list simply fails to evaluate on an older channel.
   inherit (pkgs) stdenv fetchurl dpkg buildFHSEnv bash runCommand coreutils perl
-    xrandr xrdb gawk;
+    xrandr xrdb gawk util-linux;
 
   # Packages of the FHS sandbox, taken by attribute name so that the ones a
   # given nixpkgs does not provide are skipped instead of breaking evaluation
@@ -839,7 +839,7 @@ SCRIPT_EOF
         sleep 1
         kill -KILL "$qoe_pid" 2>/dev/null || true
         # In case the agent forked itself away from the pid we started.
-        pkill -f "QoEAgent" 2>/dev/null || true
+        pkill -f "$qoe_dir/bin/QoEAgent" 2>/dev/null || true
       fi
 
       exit "$rc"
@@ -982,7 +982,19 @@ SCRIPT_EOF
       # must not shadow the sandbox's newer glib2/cairo/libm (it is an old UOS
       # layer), so mirror the FHS libraries first, add only the buster sonames
       # the FHS lacks, and let the vendor dir fill the rest.
-      state="''${XDG_RUNTIME_DIR:-/tmp}/cmcc-jtydn-redirect"
+      # This script runs as root from the systemd unit, so the scratch
+      # directory must not live in world-writable /tmp: a user could pre-create
+      # /tmp/cmcc-jtydn-redirect (or a symlink inside it) and make root write
+      # through it.  /run/cmcc-jtydn is created by RuntimeDirectory and is
+      # root-only; a manual non-root run keeps its own XDG_RUNTIME_DIR.
+      if [ "$(id -u)" = 0 ]; then
+        state=/run/cmcc-jtydn/state
+        mkdir -p "$state"
+        chmod 700 "$state"
+      else
+        state="''${XDG_RUNTIME_DIR:-/tmp}/cmcc-jtydn-redirect"
+        mkdir -p "$state"
+      fi
       fhs_libs="$state/.fhs-libs"
       deb_libs="$state/.debian-libs"
       rm -rf "$fhs_libs" "$deb_libs"
@@ -1046,15 +1058,32 @@ SCRIPT_EOF
       state="''${XDG_DATA_HOME:-$HOME/.local/share}/cmcc-jtydn/${version}"
 
       if [ ! -f "$state/.complete" ]; then
-        echo "cmcc-jtydn: preparing a writable copy of the client in $state (about 1.1 GB, first run only)" >&2
-        tmp="$state.tmp.$$"
-        ${coreutils}/bin/rm -rf "$tmp"
-        ${coreutils}/bin/mkdir -p "$tmp"
-        ${coreutils}/bin/cp -a "${app}/opt/chuanyun-vdi-client" "$tmp/app"
-        ${coreutils}/bin/chmod -R u+w "$tmp/app"
-        ${coreutils}/bin/rm -rf "$state"
-        ${coreutils}/bin/mv "$tmp" "$state"
-        ${coreutils}/bin/touch "$state/.complete"
+        # Two clients started at once must not rm -rf each other's copy, and an
+        # interrupted copy must not leave a 1.1 GB directory behind.
+        ${coreutils}/bin/mkdir -p "''${state%/*}"
+        exec 9>"$state.lock"
+        ${util-linux}/bin/flock 9
+        if [ ! -f "$state/.complete" ]; then
+          echo "cmcc-jtydn: preparing a writable copy of the client in $state (about 1.1 GB, first run only)" >&2
+          tmp="$state.tmp.$$"
+          cleanup_tmp() {
+            if [ -n "''${tmp:-}" ]; then
+              ${coreutils}/bin/rm -rf "$tmp"
+            fi
+          }
+          trap cleanup_tmp EXIT
+          ${coreutils}/bin/rm -rf "$state".tmp.*
+          ${coreutils}/bin/rm -rf "$tmp"
+          ${coreutils}/bin/mkdir -p "$tmp"
+          ${coreutils}/bin/cp -a "${app}/opt/chuanyun-vdi-client" "$tmp/app"
+          ${coreutils}/bin/chmod -R u+w "$tmp/app"
+          ${coreutils}/bin/rm -rf "$state"
+          ${coreutils}/bin/mv "$tmp" "$state"
+          tmp=
+          trap - EXIT
+          ${coreutils}/bin/touch "$state/.complete"
+        fi
+        exec 9>&-
       fi
 
       exec "${fhs}/bin/cmcc-jtydn-fhs" "$@"
