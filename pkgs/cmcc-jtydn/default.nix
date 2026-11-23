@@ -155,6 +155,59 @@ SCRIPT_EOF
     chmod 755 "$out/bin/${name}"
   '';
 
+  # Both wrappers (the client and the USB daemon) need the same three-layer
+  # library search: FHS first, then the Debian 10 sonames the FHS lacks, then
+  # the vendor bundle.  The first two layers are symlink mirrors, so this script
+  # builds them once per state directory and caches the result; the caller gets
+  # "<fhs>:<debian>" on stdout and appends its own vendor directories.
+  libLayers = mkScript {
+    name = "cmcc-jtydn-lib-layers";
+    text = ''
+      set -eu
+      state="''\${1:?usage: cmcc-jtydn-lib-layers <state-dir>}"
+      fhs_libs="$state/.fhs-libs"
+      deb_libs="$state/.debian-libs"
+
+      # The mirror is only valid for the sandbox it was built in; a client
+      # upgrade or a different nixpkgs changes the listing.
+      sig="$({
+        for libdir in /usr/lib /usr/lib64 /lib /lib64; do
+          [ -d "$libdir" ] || continue
+          printf '%s\n' "$libdir"
+          ls -1 "$libdir" 2>/dev/null || true
+        done
+      } | ${coreutils}/bin/cksum)"
+
+      if [ -f "$state/.libs-sig" ] && [ -d "$fhs_libs" ] && [ -d "$deb_libs" ] \
+         && [ "$(${coreutils}/bin/cat "$state/.libs-sig")" = "$sig" ]; then
+        printf '%s:%s\n' "$fhs_libs" "$deb_libs"
+        exit 0
+      fi
+
+      rm -rf "$fhs_libs" "$deb_libs"
+      mkdir -p "$fhs_libs" "$deb_libs"
+      for libdir in /usr/lib /usr/lib64 /lib /lib64; do
+        [ -d "$libdir" ] || continue
+        for f in "$libdir"/*.so*; do
+          [ -e "$f" ] || continue
+          b="''\${f##*/}"
+          [ -e "$fhs_libs/$b" ] || ln -s "$f" "$fhs_libs/$b"
+        done
+      done
+      # Keep only the Debian sonames the FHS does not provide: a buster library
+      # duplicating a nixpkgs one (libharfbuzz.so.0) would drag in its own
+      # buster chain (libgraphite2, libicu63, ...).
+      for f in /debian-libs/lib/*.so*; do
+        [ -e "$f" ] || continue
+        b="''\${f##*/}"
+        [ -e "$fhs_libs/$b" ] && continue
+        ln -s "$f" "$deb_libs/$b"
+      done
+      printf '%s' "$sig" > "$state/.libs-sig"
+      printf '%s:%s\n' "$fhs_libs" "$deb_libs"
+    '';
+  };
+
   # The viewer turns every key into a keysym first, and Qt does that with the
   # *current* keyboard state:  `xkb_state_key_get_one_sym(state, keycode)`.
   # A key-release event arrives while the modifier it releases is still down,
@@ -654,37 +707,9 @@ SCRIPT_EOF
       # the sandbox's ld cache -- so they are mirrored into a directory that is
       # placed in front, giving an explicit order instead of relying on
       # "LD_LIBRARY_PATH beats ld.so.cache".
-      fhs_libs="$state/.fhs-libs"
-      rm -rf "$fhs_libs"
-      mkdir -p "$fhs_libs"
-      for libdir in /usr/lib /usr/lib64 /lib /lib64; do
-        [ -d "$libdir" ] || continue
-        for f in "$libdir"/*.so*; do
-          [ -e "$f" ] || continue
-          b="''${f##*/}"
-          if [ ! -e "$fhs_libs/$b" ]; then
-            ln -s "$f" "$fhs_libs/$b"
-          fi
-        done
-      done
-
-      # From the mounted Debian set, keep only sonames the FHS does not already
-      # provide.  A buster library duplicating a nixpkgs one (libharfbuzz.so.0)
-      # would otherwise drag in its own buster chain (libgraphite2, libicu63,
-      # ...) and break startup for everyone.
-      deb_libs="$state/.debian-libs"
-      rm -rf "$deb_libs"
-      mkdir -p "$deb_libs"
-      for f in /debian-libs/lib/*.so*; do
-        [ -e "$f" ] || continue
-        b="''${f##*/}"
-        if [ -e "$fhs_libs/$b" ]; then
-          continue
-        fi
-        ln -s "$f" "$deb_libs/$b"
-      done
-
-      libpath="$fhs_libs:$deb_libs"
+      # Layers 1+2 are symlink mirrors built (and cached) by the shared helper,
+      # so both wrappers get the same order:
+      libpath="$("${libLayers}/bin/cmcc-jtydn-lib-layers" "$state")"
       if [ -d "$addon/lib" ]; then
         libpath="$libpath:$addon/lib"
       fi
@@ -982,26 +1007,8 @@ SCRIPT_EOF
         state="''${XDG_RUNTIME_DIR:-/tmp}/cmcc-jtydn-redirect"
         mkdir -p "$state"
       fi
-      fhs_libs="$state/.fhs-libs"
-      deb_libs="$state/.debian-libs"
-      rm -rf "$fhs_libs" "$deb_libs"
-      mkdir -p "$fhs_libs" "$deb_libs"
-      for libdir in /usr/lib /usr/lib64 /lib /lib64; do
-        [ -d "$libdir" ] || continue
-        for f in "$libdir"/*.so*; do
-          [ -e "$f" ] || continue
-          b="''${f##*/}"
-          [ -e "$fhs_libs/$b" ] || ln -s "$f" "$fhs_libs/$b"
-        done
-      done
-      for f in /debian-libs/lib/*.so*; do
-        [ -e "$f" ] || continue
-        b="''${f##*/}"
-        [ -e "$fhs_libs/$b" ] && continue
-        ln -s "$f" "$deb_libs/$b"
-      done
-
-      export LD_LIBRARY_PATH="$fhs_libs:$deb_libs:$addon/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+      libpath="$("${libLayers}/bin/cmcc-jtydn-lib-layers" "$state")"
+      export LD_LIBRARY_PATH="$libpath:$addon/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
       export PATH="''${PATH:-/usr/bin:/bin}:/usr/sbin:/sbin"
 
       cd "$addon/bin"
