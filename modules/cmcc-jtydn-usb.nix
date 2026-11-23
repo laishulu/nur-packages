@@ -34,7 +34,10 @@ in
             found (neither pkgs.cmcc-jtydn nor pkgs.nur.repos.laishulu.cmcc-jtydn).
             Import the flake's nixosModule, apply the overlay, or set the option
             explicitly.'';
-      defaultText = lib.literalExpression "pkgs.cmcc-jtydn";
+      defaultText = lib.literalExpression ''
+        pkgs.cmcc-jtydn, or pkgs.nur.repos.laishulu.cmcc-jtydn when the
+        repository is exposed through nur.repos
+      '';
       description = ''
         The cmcc-jtydn package to take <literal>bin/cmcc-jtydn-redirect</literal>
         from.  It has to come from this repository (or its overlay), the

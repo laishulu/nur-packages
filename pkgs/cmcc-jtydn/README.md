@@ -107,7 +107,7 @@ ${XDG_DATA_HOME:-~/.local/share}/cmcc-jtydn/2.23.1/app
    guest 就一直按着 Shift。只有修饰键会中招（普通字母/数字的 keysym 不受这个
    选项影响），重连清空输入通道后恢复。
 
-修法：一个只加载进客户端进程的 `LD_PRELOAD` shim（源码见 `default.nix` 的
+修法：一个只加载进客户端进程的 `LD_PRELOAD` shim（源码见 `shims.nix` 的
 `keyboardFix`），包住 `xkb_state_key_get_one_sym`：当它把某个键解析成
 `Caps_Lock`/`Shift_Lock`/`Num_Lock`、而这个键的**基础（level 0）keysym 是修饰键**
 时，改报基础 keysym。
@@ -203,7 +203,7 @@ guest 建好显示后，viewer 立刻通过 `spice_main_channel_update_display()
 窗口大小；云端接受这个模式但驱动不了就黑屏。别的客户端不动 guest 的分辨率、只在本地
 缩放，所以没事。
 
-修法（`default.nix` 里的 `displayFix` shim + 启动器里的分辨率上限）：
+修法（`shims.nix` 里的 `displayFix` shim + `default.nix` 启动器里的分辨率上限）：
 
 1. 启动器在进沙箱后读 X 服务器的 `Xft.dpi`（KWin 在 200% 缩放下给 192）和
    `xrandr --current` 的物理分辨率（3840×2160），算出**逻辑分辨率**
