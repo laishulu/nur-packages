@@ -21,10 +21,19 @@ in
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.cmcc-jtydn or (throw ''
-        services.cmcc-jtydn-usb.package is not set and pkgs.cmcc-jtydn does not
-        exist.  Import the flake's nixosModule (which wires the package up) or
-        set the option explicitly.'');
+      default =
+        if pkgs ? cmcc-jtydn then
+          pkgs.cmcc-jtydn
+        else if pkgs ? nur && pkgs.nur ? repos && pkgs.nur.repos ? laishulu
+                && pkgs.nur.repos.laishulu ? cmcc-jtydn then
+          # NUR convention: this repository is exposed as nur.repos.laishulu
+          pkgs.nur.repos.laishulu.cmcc-jtydn
+        else
+          throw ''
+            services.cmcc-jtydn-usb.package is not set and the package cannot be
+            found (neither pkgs.cmcc-jtydn nor pkgs.nur.repos.laishulu.cmcc-jtydn).
+            Import the flake's nixosModule, apply the overlay, or set the option
+            explicitly.'';
       defaultText = lib.literalExpression "pkgs.cmcc-jtydn";
       description = ''
         The cmcc-jtydn package to take <literal>bin/cmcc-jtydn-redirect</literal>

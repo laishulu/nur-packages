@@ -266,6 +266,21 @@ guest 建好显示后，viewer 立刻通过 `spice_main_channel_update_display()
 }
 ```
 
+走 NUR 暴露的入口时（本仓库作为 NUR repo，模块在 `modules` 下，不是
+`nixosModules`——那是 flake 的输出名）：
+
+```nix
+# modules/default.nix 之类的模块文件里
+{ config, lib, pkgs, ... }:
+{
+  imports = [ pkgs.nur.repos.laishulu.modules.cmcc-jtydn-usb ];
+  services.cmcc-jtydn-usb.enable = true;
+}
+```
+
+`package` 选项会依次找 `pkgs.cmcc-jtydn`（加了本仓库 overlay 时）和
+`pkgs.nur.repos.laishulu.cmcc-jtydn`（NUR 暴露时），都不用显式指定。
+
 不用 flake 的话，把这个包做进 `environment.systemPackages` 之后手工写：
 
 ```nix
