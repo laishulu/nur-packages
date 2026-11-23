@@ -1107,6 +1107,9 @@ Wants=network.target
 
 [Service]
 Type=simple
+# the sandbox binds this over /etc/udev/rules.d so the daemon can append the
+# VID:PID permissions file there instead of failing on the read-only host path
+ExecStartPre=-${coreutils}/bin/mkdir -p /run/cmcc-jtydn/udev
 ExecStart=$out/bin/cmcc-jtydn-redirect
 # the daemon exits cleanly when it processes a stale "stop" message, so come
 # back and idle instead of staying dead

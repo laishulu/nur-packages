@@ -309,9 +309,30 @@ services.udev.extraRules = ''
   生效；真正的权限由模块里那条静态 udev 规则 + root 守护进程保证。
 - 会话结束后守护进程可能收到残留的 "stop" 消息而退出，`Restart=always` 会把它拉起来
   并保持空闲，这是预期行为。
-- 这部分依赖真实 USB 设备 + 云电脑联调，本仓库只验证到「守护进程能在沙箱里启动、
-  连上消息队列、正常收 SIGTERM 退出」；实际设备透传需要你在真机上试，日志看
-  `journalctl -u cmcc-jtydn-redirect`。
+- **顺序很重要**：客户端只在**连接那一刻**给守护进程发「启动 USB 服务」，断开时发
+  「停止」。所以守护进程必须在客户端连接之前就已经在跑（开机自启正好满足）。如果
+  你在会话中间 `systemctl restart cmcc-jtydn-redirect`，新的守护进程收不到那次启动
+  消息，列表会是空的——断开重连一次即可。
+- 实测（2.23.1 + 一个 SanDisk U 盘）：
+
+  ```
+  # journalctl -u cmcc-jtydn-redirect
+  start to connect usb server main channel....
+  success to connect server main channel!
+  main channel handle request device list ...
+  ✅ 已注册 USB 设备：busid=3-11, 设备总数=1
+
+  # chuanyun-viewer_*.log
+  🔍 解析 USB 状态变更: msg_type=5, vid=1921, pid=21923, busid=3-11, name=Ultra Luxe
+  ✅ USB插入（正常设备）: busid=3-11, dev_name=Ultra Luxe
+  原始设备数量: 1, 过滤后设备数量: 1
+  ```
+
+- 守护进程会往 `/etc/udev/rules.d/99-usb-permissions.rules` 追加 VID:PID 权限规则；
+  沙箱里这个路径被 bind 到 `/run/cmcc-jtydn/udev`（unit 的 `ExecStartPre` 会先建目录），
+  主机侧真正的设备权限由模块里那条静态 `TAG+="uaccess"` 规则提供。
+- 其余问题看 `journalctl -u cmcc-jtydn-redirect`：`Connect fail ... 10800` 表示当时
+  没有会话（客户端未连上），会话建立后应变成 `success to connect server main channel`。
 
 ## 已知限制
 

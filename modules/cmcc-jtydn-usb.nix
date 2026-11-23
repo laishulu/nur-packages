@@ -55,6 +55,9 @@ in
       # touch USB sysfs entries, so no additional hardening here.
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/cmcc-jtydn-redirect";
+        # the daemon sandbox binds /run/cmcc-jtydn/udev over /etc/udev/rules.d
+        # and appends the VID:PID permissions file there
+        ExecStartPre = [ "+${lib.getExe' pkgs.coreutils "mkdir"} -p /run/cmcc-jtydn/udev" ];
         # the daemon exits cleanly after processing a stale "stop" message
         # from a previous session, so always come back and idle
         Restart = "always";
