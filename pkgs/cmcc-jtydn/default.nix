@@ -16,7 +16,14 @@ let
   # nixos-24.05), and individual attribute names move between releases -- a
   # plain `{ libgbm, ... }:` list simply fails to evaluate on an older channel.
   inherit (pkgs) stdenv fetchurl dpkg buildFHSEnv bash runCommand coreutils perl
-    xrandr xrdb gawk util-linux;
+    gawk util-linux;
+
+  # xrdb/xrandr only became top-level attributes after 24.05; on the channels
+  # where they are absent they still exist under `xorg`.  A plain
+  # `inherit (pkgs) xrdb` aborts the evaluation of the whole repository on
+  # those channels, which is exactly what the CI matrix hits.
+  xrdb = pkgs.xrdb or pkgs.xorg.xrdb;
+  xrandr = pkgs.xrandr or pkgs.xorg.xrandr;
 
   # Packages of the FHS sandbox, taken by attribute name so that the ones a
   # given nixpkgs does not provide are skipped instead of breaking evaluation
