@@ -96,7 +96,13 @@ let
     "libglvnd"
     "mesa"
     "vulkan-loader"
+    # VA-API: `mesa` only ships the radeon/nouveau/virtio/d3d12 drivers.  Intel
+    # hardware needs iHD_drv_video.so from intel-media-driver, otherwise libva
+    # finds no driver at all and Chromium logs "vaGetDriverNames() failed".
     "libva"
+    "intel-media-driver"
+    # `vainfo` for the --check-vaapi self-check below.
+    "libva-utils"
     "wayland"
     "pciutils"
     "libpulseaudio"
@@ -222,6 +228,15 @@ SCRIPT_EOF
           echo "baidunetdisk: no missing shared libraries"
         fi
         exit "$status"
+      fi
+
+      # `baidunetdisk --check-vaapi` prints libva's view of the hardware: the
+      # driver that gets loaded and the decode profiles it offers.  The X11
+      # backend prints a non-fatal "vaGetDriverNames() failed" line before the
+      # driver line; that is libva's own bookkeeping, not a missing driver.
+      if [ "''${1:-}" = "--check-vaapi" ]; then
+        shift
+        exec vainfo "$@"
       fi
 
       if [ ! -x "$appdir/baidunetdisk" ]; then

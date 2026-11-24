@@ -70,11 +70,16 @@ nix-build -A baidunetdisk --arg pkgs 'import <nixpkgs> { config.allowUnfree = tr
   `boost::interprocess::interprocess_exception: Permission denied` 然后 SIGABRT。
   沙箱给 `/dev/shm` 挂私有 tmpfs，这组名字就只在本实例内有效，也不会再污染宿主的
   `/dev/shm`。
+- **VA-API**：沙箱里带 `libva` 和 VA 驱动。`mesa` 只提供 AMD/Nouveau/virtio/D3D12 的
+  `*_drv_video.so`，Intel 的 `iHD_drv_video.so` 在 `intel-media-driver` 里，所以额外
+  加了这个包——否则 libva 在 Intel 机器上一个驱动都找不到。NVIDIA 的
+  `nvidia-vaapi-driver` 没带：它要宿主的 NVIDIA 驱动库，FHS 里没有。
 - **读写**：客户端把配置写到 `~/.config/baidunetdisk`，安装目录只读没问题，所以不像
   `cmcc-jtydn` 那样需要复制一份可写副本。
-- **缺库自检**：`baidunetdisk --check-libs` 在沙箱里对主程序、各个 helper 和 vendor
-  `.so` 逐个跑 `ldd`，打印仍然缺失的库；正常输出
-  `baidunetdisk: no missing shared libraries`。
+- **自检**：`baidunetdisk --check-libs` 在沙箱里对主程序、各个 helper 和 vendor `.so`
+  逐个跑 `ldd`，打印仍然缺失的库（正常输出
+  `baidunetdisk: no missing shared libraries`）；`baidunetdisk --check-vaapi` 直接跑
+  `vainfo`，打印 libva 实际加载的驱动和解码 profile。
 
 ## 验证情况
 
@@ -86,7 +91,9 @@ nix-build -A baidunetdisk --arg pkgs 'import <nixpkgs> { config.allowUnfree = tr
   扫码登录页、二维码、中文文案都正常渲染；
 - 用一条别属主的 `sem.baidu_netdisk_service_mutex` 复现了 `netdisk_service` 的
   SIGABRT（`boost::interprocess::interprocess_exception: Permission denied`）；
-  给沙箱挂私有 `/dev/shm` 后，同样条件下服务正常存活，宿主的 `/dev/shm` 也不再被写入。
+  给沙箱挂私有 `/dev/shm` 后，同样条件下服务正常存活，宿主的 `/dev/shm` 也不再被写入；
+- 沙箱内 `vainfo`/`--check-vaapi` 报 `Intel iHD driver ... 26.3.5`，H.264/HEVC/VP9
+  解码 profile 齐全（宿主机 GPU 是 Intel，`/dev/dri/renderD128`）。
 
 没有验证的部分：真实桌面上的托盘图标、文件对话框、拖拽上传（需要真正的桌面环境）。
 
@@ -97,8 +104,11 @@ nix-build -A baidunetdisk --arg pkgs 'import <nixpkgs> { config.allowUnfree = tr
   客户端自己用 WebGL 画界面时的帧回读，不影响功能。`--log-level=3` 和
   `--disable-logging` 都压不住它（GPU 进程直接写 stderr），不想看就重定向：
   `nix run .#baidunetdisk 2>/dev/null`。
-- `libva error: vaGetDriverNames() failed`：没探测到 VA-API 硬件解码后回退软件解码；
-  没有可用 GPU/驱动的机器（虚拟机、容器、Xvfb）里属正常现象。
+- `libva error: vaGetDriverNames() failed with unknown libva error`：这是 libva 在
+  **X11 显示后端**上枚举驱动名时的自检失败，不代表“没找到驱动”。可以自己复现：
+  `vainfo --display x11` 会打出同一行，紧接着仍然报
+  `Driver version: Intel iHD driver ...` 并列出解码 profile；`vainfo --display drm`
+  则完全没这行。Chromium 把它当非致命继续初始化，可以忽略。
 
 ## 已知限制
 
