@@ -246,7 +246,17 @@ SCRIPT_EOF
     # its own /run, so without this bind the client cannot reach the portal,
     # notification and tray services and logs "A connection to the bus can't be
     # made".
-    extraBwrapArgs = [ "--bind-try" "/run/user" "/run/user" ];
+    #
+    # A private /dev/shm keeps the vendor's fixed-name objects
+    # (`sem.baidu_netdisk_service_mutex`, `netdisk_unite_message_queue`) inside
+    # the sandbox.  They are system-wide on the host: netdisk_service opens the
+    # existing semaphore with O_RDWR, and a leftover owned by another user
+    # cannot be opened (nor unlinked, /dev/shm is sticky), so the service dies
+    # with an uncaught boost::interprocess_exception -- "Permission denied".
+    extraBwrapArgs = [
+      "--bind-try" "/run/user" "/run/user"
+      "--tmpfs" "/dev/shm"
+    ];
 
     runScript = "${inner}/bin/baidunetdisk-inner";
   };
