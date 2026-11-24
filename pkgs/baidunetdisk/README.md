@@ -90,6 +90,16 @@ nix-build -A baidunetdisk --arg pkgs 'import <nixpkgs> { config.allowUnfree = tr
 
 没有验证的部分：真实桌面上的托盘图标、文件对话框、拖拽上传（需要真正的桌面环境）。
 
+## 终端里的无害输出
+
+- `[ERROR:gl_utils.cc(319)] ... GL Driver Message (OpenGL, Performance, ...): GPU stall due
+  to ReadPixels`：Chromium 把 GL 驱动的「性能」级提示也按 ERROR 打到 stderr，来源是
+  客户端自己用 WebGL 画界面时的帧回读，不影响功能。`--log-level=3` 和
+  `--disable-logging` 都压不住它（GPU 进程直接写 stderr），不想看就重定向：
+  `nix run .#baidunetdisk 2>/dev/null`。
+- `libva error: vaGetDriverNames() failed`：没探测到 VA-API 硬件解码后回退软件解码；
+  没有可用 GPU/驱动的机器（虚拟机、容器、Xvfb）里属正常现象。
+
 ## 已知限制
 
 - 只支持 `x86_64-linux`：厂商只提供 amd64 的 `.deb`（arm64 的 Spark Store 包还停在
