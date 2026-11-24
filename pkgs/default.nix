@@ -19,3 +19,19 @@ in
   # instead of being a derivation that always fails.
   cmcc-jtydn = pkgs.callPackage ./cmcc-jtydn { };
 }
+// lib.optionalAttrs (pkgs.stdenv.hostPlatform.isx86_64 && exposeUnfree
+  # Same situation: a prebuilt amd64 Electron client from a vendor .deb.  On
+  # top of that it needs the GTK2 C++ stack, whose attribute names moved to
+  # versioned forms (`glibmm_2_4`, ...) in 2026; on an older channel those names
+  # do not exist yet, so the attribute is absent there instead of making the
+  # whole repository fail to evaluate.
+  && lib.all (n: lib.hasAttr n pkgs) [
+    "gtk2"
+    "glibmm_2_4"
+    "cairomm_1_0"
+    "pangomm_1_4"
+    "atkmm"
+    "libsigcxx_2_0"
+  ]) {
+  baidunetdisk = pkgs.callPackage ./baidunetdisk { };
+}
